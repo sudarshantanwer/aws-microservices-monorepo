@@ -1,0 +1,14 @@
+node_modules/
+.env
+.env.local
+.DS_Store
+.vscode/
+.idea/
+coverage/
+.npm/
+npm-debug.log*
+package-lock.json
+aws-sam-build/
+.aws-sam/
+dist/
+build/

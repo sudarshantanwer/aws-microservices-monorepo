@@ -1,0 +1,10 @@
+{
+  "name": "@shared/utils",
+  "version": "1.0.0",
+  "main": "src/index.js",
+  "type": "module",
+  "dependencies": {
+    "aws-sdk": "^2.1481.0",
+    "uuid": "^9.0.0"
+  }
+}

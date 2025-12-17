@@ -1,0 +1,12 @@
+{
+  "name": "aws-microservices-monorepo",
+  "private": true,
+  "workspaces": [
+    "shared",
+    "services/*"
+  ],
+  "scripts": {
+    "bootstrap": "npm install",
+    "build": "npm run build --workspaces"
+  }
+}

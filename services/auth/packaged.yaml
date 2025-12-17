@@ -1,0 +1,44 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Transform: AWS::Serverless-2016-10-31
+Description: Auth microservice
+Globals:
+  Function:
+    Timeout: 10
+    Runtime: nodejs18.x
+    Handler: src/handler.handler
+Resources:
+  AuthFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: s3://aws-sam-artifacts-sudarshantanwer-20251218-1/0f315e09f2d426a2c78f748f0c78faee
+      Environment:
+        Variables:
+          TABLE_NAME:
+            Ref: AuthTable
+      Events:
+        ApiEvent:
+          Type: Api
+          Properties:
+            Path: /auth
+            Method: get
+    Metadata:
+      SamResourceId: AuthFunction
+  AuthTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      AttributeDefinitions:
+      - AttributeName: id
+        AttributeType: S
+      KeySchema:
+      - AttributeName: id
+        KeyType: HASH
+      BillingMode: PAY_PER_REQUEST
+    Metadata:
+      SamResourceId: AuthTable
+Outputs:
+  ApiUrl:
+    Description: API Gateway endpoint for Auth service
+    Value:
+      Fn::Sub: https://${ServerlessRestApi}.execute-api.${AWS::Region}.amazonaws.com/Prod/
+    Export:
+      Name: AuthServiceApiUrl
