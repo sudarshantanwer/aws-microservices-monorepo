@@ -22,6 +22,11 @@ Resources:
           Properties:
             Path: /products
             Method: get
+        HealthEvent:
+          Type: Api
+          Properties:
+            Path: /products/health
+            Method: get
 
   ProductsTable:
     Type: AWS::DynamoDB::Table

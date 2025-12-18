@@ -22,6 +22,11 @@ Resources:
           Properties:
             Path: /users
             Method: get
+        HealthEvent:
+          Type: Api
+          Properties:
+            Path: /users/health
+            Method: get
 
   UsersTable:
     Type: AWS::DynamoDB::Table

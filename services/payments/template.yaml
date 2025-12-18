@@ -22,6 +22,11 @@ Resources:
           Properties:
             Path: /payments
             Method: post
+        HealthEvent:
+          Type: Api
+          Properties:
+            Path: /payments/health
+            Method: get
 
   PaymentsTable:
     Type: AWS::DynamoDB::Table

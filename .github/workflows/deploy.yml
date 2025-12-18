@@ -1,0 +1,44 @@
+name: CI/CD - Deploy services
+
+on:
+  push:
+    branches: [ "master" ]
+  workflow_dispatch: {}
+
+jobs:
+  build-and-deploy:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: ./services
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '18'
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v2
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ap-south-1
+
+      - name: Install SAM CLI
+        run: |
+          pip install --user aws-sam-cli
+
+      - name: Deploy each service
+        run: |
+          for svc in auth users orders products payments; do
+            echo "Deploying $svc"
+            cd $svc
+            sam build
+            sam package --s3-bucket $S3_BUCKET --output-template-file packaged.yaml
+            aws cloudformation deploy --template-file packaged.yaml --stack-name ${svc}-stack --capabilities CAPABILITY_IAM --region ap-south-1
+            cd ..
+          done
+        env:
+          S3_BUCKET: ${{ secrets.S3_BUCKET }}

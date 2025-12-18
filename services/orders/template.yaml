@@ -22,6 +22,11 @@ Resources:
           Properties:
             Path: /orders
             Method: post
+        HealthEvent:
+          Type: Api
+          Properties:
+            Path: /orders/health
+            Method: get
 
   OrdersTable:
     Type: AWS::DynamoDB::Table

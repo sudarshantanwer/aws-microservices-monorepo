@@ -22,6 +22,11 @@ Resources:
           Properties:
             Path: /auth
             Method: get
+        HealthEvent:
+          Type: Api
+          Properties:
+            Path: /auth/health
+            Method: get
 
   AuthTable:
     Type: AWS::DynamoDB::Table
