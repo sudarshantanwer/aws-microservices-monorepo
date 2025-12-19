@@ -1,0 +1,488 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: >-
+  CloudFormation template to provision a private S3 bucket for static assets
+  and a CloudFront distribution that serves the assets (with an Origin Access
+  Identity so the bucket remains private).
+
+Parameters:
+  BucketName:
+    Type: String
+    Description: S3 bucket name to create for frontend assets
+  CertificateArn:
+    Type: String
+    Description: (Optional) ACM certificate ARN to use for the CloudFront distribution
+    Default: ""
+  UseCustomCert:
+    Type: String
+    AllowedValues: ["true", "false"]
+    Default: "false"
+
+Conditions:
+  UseCustomCertCondition: !Equals [ !Ref UseCustomCert, "true" ]
+
+Resources:
+  FrontendBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: !Ref BucketName
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+
+  CloudFrontOAI:
+    Type: AWS::CloudFront::CloudFrontOriginAccessIdentity
+    Properties:
+      CloudFrontOriginAccessIdentityConfig:
+        Comment: !Sub "OAI for ${AWS::StackName}-frontend"
+
+  # Cognito resources: User Pool, App Client and Domain
+  CognitoUserPool:
+    Type: AWS::Cognito::UserPool
+    Properties:
+      UserPoolName: !Sub "${AWS::StackName}-user-pool"
+      AutoVerifiedAttributes: ["email"]
+      UsernameAttributes: ["email"]
+      Policies:
+        PasswordPolicy:
+          MinimumLength: 8
+          RequireLowercase: false
+          RequireNumbers: false
+          RequireSymbols: false
+          RequireUppercase: false
+      AccountRecoverySetting:
+        RecoveryMechanisms:
+          - Name: VERIFIED_EMAIL
+            Priority: 1
+
+  CognitoUserPoolClient:
+    Type: AWS::Cognito::UserPoolClient
+    Properties:
+      ClientName: !Sub "${AWS::StackName}-app-client"
+      GenerateSecret: false
+      UserPoolId: !Ref CognitoUserPool
+      ExplicitAuthFlows:
+        - ALLOW_ADMIN_USER_PASSWORD_AUTH
+        - ALLOW_USER_PASSWORD_AUTH
+        - ALLOW_REFRESH_TOKEN_AUTH
+      SupportedIdentityProviders: ["COGNITO"]
+      PreventUserExistenceErrors: ENABLED
+
+  CognitoUserPoolDomain:
+    Type: AWS::Cognito::UserPoolDomain
+    Properties:
+      Domain: !Sub "${AWS::StackName}-auth-domain-${AWS::AccountId}"
+      UserPoolId: !Ref CognitoUserPool
+
+  # Central HTTP API to act as a single gateway for microservices
+  ApiGatewayHttpApi:
+    Type: AWS::ApiGatewayV2::Api
+    Properties:
+      Name: !Sub "${AWS::StackName}-central-api"
+      ProtocolType: HTTP
+
+  ApiGatewayAuthorizer:
+    Type: AWS::ApiGatewayV2::Authorizer
+    Properties:
+      ApiId: !Ref ApiGatewayHttpApi
+      Name: JwtAuthorizer
+      AuthorizerType: JWT
+      IdentitySource:
+        - "$request.header.Authorization"
+      JwtConfiguration:
+        Issuer: !Sub "https://cognito-idp.${AWS::Region}.amazonaws.com/${CognitoUserPool}"
+        Audience:
+          - !Ref CognitoUserPoolClient
+
+  # Integrations proxying to existing Execute-API endpoints
+  AuthIntegration:
+    Type: AWS::ApiGatewayV2::Integration
+    Properties:
+      ApiId: !Ref ApiGatewayHttpApi
+      IntegrationType: HTTP_PROXY
+      IntegrationUri: https://q8na93x6yh.execute-api.ap-south-1.amazonaws.com/Prod
+      PayloadFormatVersion: "1.0"
+
+  UsersIntegration:
+    Type: AWS::ApiGatewayV2::Integration
+    Properties:
+      ApiId: !Ref ApiGatewayHttpApi
+      IntegrationType: HTTP_PROXY
+      IntegrationUri: https://b2d9i0qp17.execute-api.ap-south-1.amazonaws.com/Prod
+      PayloadFormatVersion: "1.0"
+
+  ProductsIntegration:
+    Type: AWS::ApiGatewayV2::Integration
+    Properties:
+      ApiId: !Ref ApiGatewayHttpApi
+      IntegrationType: HTTP_PROXY
+      IntegrationUri: https://l3stt9u4u6.execute-api.ap-south-1.amazonaws.com/Prod
+      PayloadFormatVersion: "1.0"
+
+  OrdersIntegration:
+    Type: AWS::ApiGatewayV2::Integration
+    Properties:
+      ApiId: !Ref ApiGatewayHttpApi
+      IntegrationType: HTTP_PROXY
+      IntegrationUri: https://c6lflq1hj2.execute-api.ap-south-1.amazonaws.com/Prod
+      PayloadFormatVersion: "1.0"
+
+  PaymentsIntegration:
+    Type: AWS::ApiGatewayV2::Integration
+    Properties:
+      ApiId: !Ref ApiGatewayHttpApi
+      IntegrationType: HTTP_PROXY
+      IntegrationUri: https://xyfg2t3fg1.execute-api.ap-south-1.amazonaws.com/Prod
+      PayloadFormatVersion: "1.0"
+
+  # Routes that proxy with JWT authorizer enabled
+  AuthRouteProxy:
+    Type: AWS::ApiGatewayV2::Route
+    Properties:
+      ApiId: !Ref ApiGatewayHttpApi
+      RouteKey: "ANY /auth/{proxy+}"
+      Target: !Sub "integrations/${AuthIntegration}"
+      AuthorizerId: !Ref ApiGatewayAuthorizer
+      AuthorizationType: JWT
+
+  AuthRouteRoot:
+    Type: AWS::ApiGatewayV2::Route
+    Properties:
+      ApiId: !Ref ApiGatewayHttpApi
+      RouteKey: "ANY /auth"
+      Target: !Sub "integrations/${AuthIntegration}"
+      AuthorizerId: !Ref ApiGatewayAuthorizer
+      AuthorizationType: JWT
+
+  UsersRouteProxy:
+    Type: AWS::ApiGatewayV2::Route
+    Properties:
+      ApiId: !Ref ApiGatewayHttpApi
+      RouteKey: "ANY /users/{proxy+}"
+      Target: !Sub "integrations/${UsersIntegration}"
+      AuthorizerId: !Ref ApiGatewayAuthorizer
+      AuthorizationType: JWT
+
+  UsersRouteRoot:
+    Type: AWS::ApiGatewayV2::Route
+    Properties:
+      ApiId: !Ref ApiGatewayHttpApi
+      RouteKey: "ANY /users"
+      Target: !Sub "integrations/${UsersIntegration}"
+      AuthorizerId: !Ref ApiGatewayAuthorizer
+      AuthorizationType: JWT
+
+  ProductsRouteProxy:
+    Type: AWS::ApiGatewayV2::Route
+    Properties:
+      ApiId: !Ref ApiGatewayHttpApi
+      RouteKey: "ANY /products/{proxy+}"
+      Target: !Sub "integrations/${ProductsIntegration}"
+      AuthorizerId: !Ref ApiGatewayAuthorizer
+      AuthorizationType: JWT
+
+  ProductsRouteRoot:
+    Type: AWS::ApiGatewayV2::Route
+    Properties:
+      ApiId: !Ref ApiGatewayHttpApi
+      RouteKey: "ANY /products"
+      Target: !Sub "integrations/${ProductsIntegration}"
+      AuthorizerId: !Ref ApiGatewayAuthorizer
+      AuthorizationType: JWT
+
+  OrdersRouteProxy:
+    Type: AWS::ApiGatewayV2::Route
+    Properties:
+      ApiId: !Ref ApiGatewayHttpApi
+      RouteKey: "ANY /orders/{proxy+}"
+      Target: !Sub "integrations/${OrdersIntegration}"
+      AuthorizerId: !Ref ApiGatewayAuthorizer
+      AuthorizationType: JWT
+
+  OrdersRouteRoot:
+    Type: AWS::ApiGatewayV2::Route
+    Properties:
+      ApiId: !Ref ApiGatewayHttpApi
+      RouteKey: "ANY /orders"
+      Target: !Sub "integrations/${OrdersIntegration}"
+      AuthorizerId: !Ref ApiGatewayAuthorizer
+      AuthorizationType: JWT
+
+  PaymentsRouteProxy:
+    Type: AWS::ApiGatewayV2::Route
+    Properties:
+      ApiId: !Ref ApiGatewayHttpApi
+      RouteKey: "ANY /payments/{proxy+}"
+      Target: !Sub "integrations/${PaymentsIntegration}"
+      AuthorizerId: !Ref ApiGatewayAuthorizer
+      AuthorizationType: JWT
+
+  PaymentsRouteRoot:
+    Type: AWS::ApiGatewayV2::Route
+    Properties:
+      ApiId: !Ref ApiGatewayHttpApi
+      RouteKey: "ANY /payments"
+      Target: !Sub "integrations/${PaymentsIntegration}"
+      AuthorizerId: !Ref ApiGatewayAuthorizer
+      AuthorizationType: JWT
+
+  ApiProdStage:
+    Type: AWS::ApiGatewayV2::Stage
+    Properties:
+      ApiId: !Ref ApiGatewayHttpApi
+      StageName: Prod
+      AutoDeploy: true
+
+  # Simple WAF WebACL with a rate limiting rule
+  ApiWebACL:
+    Type: AWS::WAFv2::WebACL
+    Properties:
+      Name: !Sub "${AWS::StackName}-webacl"
+      Scope: CLOUDFRONT
+      DefaultAction:
+        Allow: {}
+      VisibilityConfig:
+        SampledRequestsEnabled: true
+        CloudWatchMetricsEnabled: true
+        MetricName: !Sub "${AWS::StackName}-webacl-metric"
+      Rules:
+        - Name: RateLimitRule
+          Priority: 0
+          Action:
+            Block: {}
+          Statement:
+            RateBasedStatement:
+              Limit: 1000
+              AggregateKeyType: IP
+          VisibilityConfig:
+            SampledRequestsEnabled: true
+            CloudWatchMetricsEnabled: true
+            MetricName: RateLimitRule
+
+  ApiWebACLAssociation:
+    Type: AWS::WAFv2::WebACLAssociation
+    Properties:
+      ResourceArn: !Join
+        - ''
+        - - 'arn:aws:cloudfront::'
+          - !Ref 'AWS::AccountId'
+          - ':distribution/'
+          - !Ref CloudFrontDistribution
+      WebACLArn: !GetAtt ApiWebACL.Arn
+
+  CloudFrontDistribution:
+    Type: AWS::CloudFront::Distribution
+    Properties:
+      DistributionConfig:
+        Enabled: true
+        DefaultRootObject: index.html
+        Origins:
+          - Id: S3-Frontend-Origin
+            DomainName: !GetAtt FrontendBucket.DomainName
+            S3OriginConfig:
+              OriginAccessIdentity: !Sub "origin-access-identity/cloudfront/${CloudFrontOAI}"
+
+          - Id: AuthApiOrigin
+            DomainName: q8na93x6yh.execute-api.ap-south-1.amazonaws.com
+            OriginPath: /Prod
+            CustomOriginConfig:
+              OriginProtocolPolicy: https-only
+              HTTPSPort: 443
+
+          - Id: UsersApiOrigin
+            DomainName: b2d9i0qp17.execute-api.ap-south-1.amazonaws.com
+            OriginPath: /Prod
+            CustomOriginConfig:
+              OriginProtocolPolicy: https-only
+              HTTPSPort: 443
+
+          - Id: ProductsApiOrigin
+            DomainName: l3stt9u4u6.execute-api.ap-south-1.amazonaws.com
+            OriginPath: /Prod
+            CustomOriginConfig:
+              OriginProtocolPolicy: https-only
+              HTTPSPort: 443
+
+          - Id: OrdersApiOrigin
+            DomainName: c6lflq1hj2.execute-api.ap-south-1.amazonaws.com
+            OriginPath: /Prod
+            CustomOriginConfig:
+              OriginProtocolPolicy: https-only
+              HTTPSPort: 443
+
+          - Id: PaymentsApiOrigin
+            DomainName: xyfg2t3fg1.execute-api.ap-south-1.amazonaws.com
+            OriginPath: /Prod
+            CustomOriginConfig:
+              OriginProtocolPolicy: https-only
+              HTTPSPort: 443
+
+        DefaultCacheBehavior:
+          TargetOriginId: S3-Frontend-Origin
+          ViewerProtocolPolicy: redirect-to-https
+          AllowedMethods:
+            - GET
+            - HEAD
+            - OPTIONS
+          CachedMethods:
+            - GET
+            - HEAD
+          Compress: true
+          CachePolicyId: 658327ea-f89d-4fab-a63d-7e88639e58f6 # Managed-CachingOptimized
+          ResponseHeadersPolicyId: 67f7725c-6f8c-47b1-8f15-4f5e6a0a3b2f # Managed-SecurityHeaders (if available)
+
+        CacheBehaviors:
+          - PathPattern: "/auth/*"
+            TargetOriginId: AuthApiOrigin
+            ViewerProtocolPolicy: redirect-to-https
+            AllowedMethods:
+              - GET
+              - HEAD
+              - OPTIONS
+              - PUT
+              - POST
+              - PATCH
+              - DELETE
+            CachedMethods:
+              - GET
+              - HEAD
+            Compress: true
+            ForwardedValues:
+              QueryString: true
+              Cookies:
+                Forward: all
+              Headers:
+                - '*'
+            MinTTL: 0
+            DefaultTTL: 0
+            MaxTTL: 0
+
+          - PathPattern: "/users/*"
+            TargetOriginId: UsersApiOrigin
+            ViewerProtocolPolicy: redirect-to-https
+            AllowedMethods:
+              - GET
+              - HEAD
+              - OPTIONS
+              - PUT
+              - POST
+              - PATCH
+              - DELETE
+            CachedMethods:
+              - GET
+              - HEAD
+            Compress: true
+            ForwardedValues:
+              QueryString: true
+              Cookies:
+                Forward: all
+              Headers:
+                - '*'
+            MinTTL: 0
+            DefaultTTL: 0
+            MaxTTL: 0
+
+          - PathPattern: "/products/*"
+            TargetOriginId: ProductsApiOrigin
+            ViewerProtocolPolicy: redirect-to-https
+            AllowedMethods:
+              - GET
+              - HEAD
+              - OPTIONS
+              - PUT
+              - POST
+              - PATCH
+              - DELETE
+            CachedMethods:
+              - GET
+              - HEAD
+            Compress: true
+            ForwardedValues:
+              QueryString: true
+              Cookies:
+                Forward: all
+              Headers:
+                - '*'
+            MinTTL: 0
+            DefaultTTL: 0
+            MaxTTL: 0
+
+          - PathPattern: "/orders/*"
+            TargetOriginId: OrdersApiOrigin
+            ViewerProtocolPolicy: redirect-to-https
+            AllowedMethods:
+              - GET
+              - HEAD
+              - OPTIONS
+              - PUT
+              - POST
+              - PATCH
+              - DELETE
+            CachedMethods:
+              - GET
+              - HEAD
+            Compress: true
+            ForwardedValues:
+              QueryString: true
+              Cookies:
+                Forward: all
+              Headers:
+                - '*'
+            MinTTL: 0
+            DefaultTTL: 0
+            MaxTTL: 0
+
+          - PathPattern: "/payments/*"
+            TargetOriginId: PaymentsApiOrigin
+            ViewerProtocolPolicy: redirect-to-https
+            AllowedMethods:
+              - GET
+              - HEAD
+              - OPTIONS
+              - PUT
+              - POST
+              - PATCH
+              - DELETE
+            CachedMethods:
+              - GET
+              - HEAD
+            Compress: true
+            ForwardedValues:
+              QueryString: true
+              Cookies:
+                Forward: all
+              Headers:
+                - '*'
+            MinTTL: 0
+            DefaultTTL: 0
+            MaxTTL: 0
+
+        ViewerCertificate: !If
+          - UseCustomCertCondition
+          - {
+              AcmCertificateArn: !Ref CertificateArn,
+              SslSupportMethod: sni-only,
+              MinimumProtocolVersion: TLSv1.2_2019
+            }
+          - { CloudFrontDefaultCertificate: true }
+
+Outputs:
+  BucketName:
+    Description: Name of the S3 bucket created for frontend assets
+    Value: !Ref FrontendBucket
+  DistributionId:
+    Description: CloudFront Distribution Id
+    Value: !Ref CloudFrontDistribution
+  DistributionDomainName:
+    Description: CloudFront distribution domain name
+    Value: !GetAtt CloudFrontDistribution.DomainName
+  CognitoUserPoolId:
+    Description: Cognito User Pool Id
+    Value: !Ref CognitoUserPool
+  CognitoUserPoolClientId:
+    Description: Cognito App Client Id
+    Value: !Ref CognitoUserPoolClient
+  CognitoIssuer:
+    Description: Cognito JWT issuer URL
+    Value: !Sub "https://cognito-idp.${AWS::Region}.amazonaws.com/${CognitoUserPool}"
