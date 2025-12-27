@@ -9,10 +9,12 @@ jobs:
   deploy:
     name: Build and Deploy Frontend
     runs-on: ubuntu-latest
+
     env:
       S3_BUCKET: ${{ secrets.S3_BUCKET }}
       STACK_NAME: ${{ secrets.FRONTEND_STACK_NAME }}
       AWS_REGION: ${{ secrets.AWS_REGION }}
+
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -37,27 +39,50 @@ jobs:
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
           aws-region: ${{ env.AWS_REGION }}
 
+      # ✅ NEW: Self-healing CloudFormation step
+      - name: Cleanup failed CloudFormation stack
+        run: |
+          STATUS=$(aws cloudformation describe-stacks \
+            --stack-name "$STACK_NAME" \
+            --query "Stacks[0].StackStatus" \
+            --output text 2>/dev/null || echo "NOT_FOUND")
+
+          echo "Current stack status: $STATUS"
+
+          if [ "$STATUS" = "ROLLBACK_COMPLETE" ]; then
+            echo "Deleting failed stack..."
+            aws cloudformation delete-stack --stack-name "$STACK_NAME"
+            aws cloudformation wait stack-delete-complete --stack-name "$STACK_NAME"
+          fi
+
       - name: Deploy CloudFormation stack
         run: |
           aws cloudformation deploy \
             --template-file services/frontend/template.yaml \
             --stack-name "$STACK_NAME" \
             --capabilities CAPABILITY_NAMED_IAM \
+            --no-fail-on-empty-changeset \
             --parameter-overrides BucketName="$S3_BUCKET" UseCustomCert=false
 
       - name: Sync dist to S3
-        run: aws s3 sync services/frontend/dist/ s3://$S3_BUCKET --delete
+        run: |
+          aws s3 sync services/frontend/dist/ s3://$S3_BUCKET --delete
 
       - name: Get CloudFront DistributionId
         id: get-dist
         run: |
-          DIST_ID=$(aws cloudformation describe-stacks --stack-name "$STACK_NAME" --query "Stacks[0].Outputs[?OutputKey=='DistributionId'].OutputValue" --output text)
+          DIST_ID=$(aws cloudformation describe-stacks \
+            --stack-name "$STACK_NAME" \
+            --query "Stacks[0].Outputs[?OutputKey=='DistributionId'].OutputValue" \
+            --output text)
           echo "DIST_ID=$DIST_ID" >> $GITHUB_ENV
 
       - name: Invalidate CloudFront cache
         run: |
           if [ -n "$DIST_ID" ] && [ "$DIST_ID" != "None" ]; then
-            aws cloudfront create-invalidation --distribution-id $DIST_ID --paths '/*'
+            aws cloudfront create-invalidation \
+              --distribution-id "$DIST_ID" \
+              --paths '/*'
           else
             echo "DistributionId not found; skipping invalidation"
           fi
