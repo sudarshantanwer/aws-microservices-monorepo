@@ -6,4 +6,4 @@ export const handler = async event => {
     return ok({ status: 'ok' });
   }
   return ok({ message: "Auth service running" });
-};
+}; 
