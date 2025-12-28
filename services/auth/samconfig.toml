@@ -1,9 +1,9 @@
 version = 0.1
 
 [default.deploy.parameters]
-stack_name = "microservice-stack"
+stack_name = "auth-stack"
 resolve_s3 = true
-s3_prefix = "microservice-stack"
+s3_prefix = "auth-stack"
 confirm_changeset = true
 capabilities = "CAPABILITY_IAM"
 disable_rollback = true
