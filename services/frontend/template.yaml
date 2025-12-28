@@ -53,7 +53,7 @@ Resources:
           RequireUppercase: false
       AccountRecoverySetting:
         RecoveryMechanisms:
-          - Name: VERIFIED_EMAIL
+          - Name: verified_email
             Priority: 1
 
   CognitoUserPoolClient:
